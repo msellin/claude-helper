@@ -1,0 +1,4 @@
+[
+  {"name": "Turned on ctx-warn (handoff at 250k)", "date": "2026-01-15", "metrics": ["pct_calls_gt250k", "avg_ctx_k"]},
+  {"name": "Added model-per-task rule to CLAUDE.md", "date": "2026-02-01", "metrics": ["opus_share", "subagent_share"]}
+]

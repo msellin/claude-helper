@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""claude-helper: one entry point for the tools in this folder.
+
+  claude-helper report [--root DIR]     analyse your transcripts -> ~/.claude-helper/report.json + daily summary
+  claude-helper backtest [--since DATE] how often each guard rule would have fired on your history
+  claude-helper events [--days 7]       what the guard actually did (fires per rule, shadow vs enforce)
+  claude-helper digest                  weekly Markdown digest -> ~/.claude-helper/digests/<date>.md
+  claude-helper compare CHANGES.json    before/after metrics around dates you changed something
+  claude-helper worktrees [--apply]     find (and optionally remove) finished git worktrees
+  claude-helper install | uninstall     add / remove the guard hook (see install.py --help)
+  claude-helper off | on                kill switch for the guard
+"""
+import collections, datetime, json, os, subprocess, sys
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+HOME = os.path.expanduser(os.getenv('CLAUDE_HELPER_HOME', '~/.claude-helper'))
+PY = [sys.executable, '-I']
+
+
+def run(script, *args):
+    return subprocess.call(PY + [os.path.join(HERE, script), *args])
+
+
+def summary(path):
+    rep = json.load(open(path))
+    w = rep['weeks']
+    if not w:
+        print('no Claude Code transcripts found (looked in ~/.claude/projects; use --root DIR for another place)')
+        return
+    print(f'\n{"day":10s} {"calls":>6s} {"weighted M":>10s} {"cache hit":>9s} {"avg ctx k":>9s} {">250k %":>7s} {"opus %":>6s} {"commits":>7s}')
+    for k in sorted(w)[-8:]:
+        r = w[k]
+        f = lambda x, m=1: '-' if x is None else f'{x * m:.0f}' if m != 1 else f'{x}'
+        print(f'{k:10s} {r["calls"]:6d} {r["weighted_M"]:10.1f} {f(r["cache_hit"]):>9s} {f(r["avg_ctx_k"]):>9s} '
+              f'{f(r["pct_calls_gt250k"]):>7s} {f(r["opus_share"], 100):>6s} {r["commits"]:7d}')
+    print('\ncostliest sessions:')
+    for s in rep['top_sessions'][:5]:
+        print(f'  {s["weighted_M"]:6.1f}M  {s["calls"]:5d} calls  {s["project"]}')
+    print(f'\nfull report: {path}   (weighted = input-token equivalents, not dollars)')
+
+
+def events(days):
+    since = (datetime.datetime.now() - datetime.timedelta(days=days)).timestamp()
+    try:
+        ev = [json.loads(l) for l in open(os.path.join(HOME, 'events.jsonl'))]
+    except OSError:
+        ev = []
+    ev = [e for e in ev if e.get('ts', 0) >= since]
+    if not ev:
+        print(f'no guard events in the last {days} days (is the hook installed? `claude-helper install`)')
+        return
+    by = collections.defaultdict(list)
+    for e in ev:
+        by[(e['rule'], e['mode'])].append(e)
+    print(f'guard events, last {days} days')
+    for (rule, mode), es in sorted(by.items()):
+        print(f'  {rule:14s} {mode:8s} fires {len(es):4d}  sessions {len({e["session"] for e in es}):3d}')
+
+
+def main():
+    a = sys.argv[1:]
+    cmd, rest = (a[0], a[1:]) if a else ('help', [])
+    if cmd == 'report':
+        out = os.path.join(HOME, 'report.json')
+        rc = run('tokwaste.py', '--out', out, '--quiet', *rest)
+        if rc == 0 and '--out' not in rest:
+            summary(out)
+        return rc
+    if cmd == 'backtest':
+        return run('backtest.py', *rest)
+    if cmd == 'events':
+        events(int(rest[rest.index('--days') + 1]) if '--days' in rest else 7)
+        return 0
+    if cmd == 'digest':
+        return run('digest.py', *rest)
+    if cmd == 'compare':
+        if not rest:
+            sys.exit('usage: claude-helper compare CHANGES.json [--days 7]   (see changes.example.json)')
+        return run('compare.py', os.path.join(HOME, 'report.json'), *rest)
+    if cmd == 'worktrees':
+        return run('worktrees.py', *rest)
+    if cmd == 'install':
+        return run('install.py', *rest)
+    if cmd == 'uninstall':
+        return run('install.py', '--uninstall', *rest)
+    if cmd in ('off', 'on'):
+        p = os.path.join(HOME, 'OFF')
+        os.makedirs(HOME, exist_ok=True)
+        open(p, 'w').close() if cmd == 'off' else os.path.exists(p) and os.remove(p)
+        print(f'guard {"disabled" if cmd == "off" else "enabled"}')
+        return 0
+    print(__doc__)
+    return 0 if cmd in ('help', '-h', '--help') else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

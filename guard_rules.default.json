@@ -1,0 +1,65 @@
+{
+  "_comment": "Starter rules: every rule is in shadow mode (logs only). Run `claude-helper backtest` and `claude-helper events`, then set \"mode\": \"enforce\" on the ones you want, in ~/.claude-helper/guard_rules.json.",
+  "rules": [
+    {
+      "id": "ctx-warn",
+      "handoff": true,
+      "metric": "context_k",
+      "gte": 250,
+      "event": "PostToolUse",
+      "action": "warn",
+      "mode": "shadow",
+      "repeat_step": 50,
+      "message": "Context is ~{value}k tokens (limit {gte}k): every turn re-reads it. A handover note was written to {handoff}: check it, add anything missing, then continue in a FRESH session."
+    },
+    {
+      "id": "ctx-block",
+      "metric": "context_k",
+      "gte": 400,
+      "event": "PreToolUse",
+      "action": "block",
+      "mode": "shadow",
+      "tools": [
+        "Agent",
+        "WebSearch",
+        "WebFetch",
+        "SendMessage"
+      ],
+      "message": "Context is ~{value}k tokens (hard limit {gte}k). New agents and web calls are blocked: write the handover file and start a fresh session."
+    },
+    {
+      "id": "session-cost",
+      "metric": "session_weighted_M",
+      "gte": 10,
+      "event": "PostToolUse",
+      "action": "warn",
+      "mode": "shadow",
+      "repeat_step": 10,
+      "message": "This session has used ~{value}M weighted units (limit {gte}M). Finish the current step, then hand off."
+    },
+    {
+      "id": "retry-loop",
+      "metric": "same_bash_repeats",
+      "gte": 3,
+      "event": "PreToolUse",
+      "action": "block",
+      "mode": "shadow",
+      "tools": [
+        "Bash"
+      ],
+      "message": "The same Bash command has now run {value} times. Stop retrying: read the error, change the approach, or ask the user."
+    },
+    {
+      "id": "agent-model",
+      "metric": "agent_no_model",
+      "gte": 1,
+      "event": "PreToolUse",
+      "action": "block",
+      "mode": "shadow",
+      "tools": [
+        "Agent"
+      ],
+      "message": "This Agent call sets no `model`, so it inherits the parent model (often Opus). Re-issue it with an explicit model: haiku for search/log reading, sonnet for coding/docs/tests, opus only for architecture/security/hard bugs."
+    }
+  ]
+}

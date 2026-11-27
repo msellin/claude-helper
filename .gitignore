@@ -1,0 +1,7 @@
+# personal notes, research and local reports (never pushed)
+private/
+report.json
+*.log
+__pycache__/
+*.pyc
+.DS_Store
