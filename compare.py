@@ -30,6 +30,9 @@ def metrics(b):
         rereads_per_1k=1000 * b.get('reread', 0) / c,
         big_toolres_per_1k=1000 * b.get('toolres_big', 0) / c,
         weighted_per_call_k=w / c / 1000,
+        usd=b.get('usd', 0),
+        usd_per_commit=b.get('usd', 0) / b['commits'] if b.get('commits') else None,
+        opus_usd_share=b.get('usd_opus', 0) / b['usd'] if b.get('usd') else None,
         commits=b.get('commits', 0),
         weighted_M_per_commit=w / 1e6 / b['commits'] if b.get('commits') else None)
 
@@ -44,7 +47,7 @@ for r in rules:
     if not before or not after or before['calls'] < 200 or after['calls'] < 200:
         print(f"  too little data: before={before and before['calls']} calls, after={after and after['calls']} calls"); continue
     print(f"  calls before/after: {before['calls']} / {after['calls']}")
-    for m in r['metrics'] + ['weighted_per_call_k', 'weighted_M_per_commit', 'cache_hit']:
+    for m in r['metrics'] + ['usd_per_commit', 'weighted_per_call_k', 'weighted_M_per_commit', 'cache_hit']:
         x, y = before[m], after[m]
         if y is None: print(f'  {m}: n/a'); continue
         print(f"  {m:22s} {x:9.3f} -> {y:9.3f}  ({(y-x)/x*100:+.0f}%)" if x else f"  {m}: n/a")

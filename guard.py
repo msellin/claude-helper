@@ -8,12 +8,26 @@ enforce = act), optional tools, repeat_step. Every firing is appended to $CLAUDE
 (default ~/.claude-helper) so rules can later be judged on data (compare.py). A guard never breaks a session:
 any error exits silently.
 Metrics: context_k (last usage record), session_weighted_M (incremental, approx input-token equivalents),
-agent_no_model (1 when an Agent call sets no model and its type is not pinned), same_bash_repeats (how many times the command being run now has run in this session).
+agent_no_model (1 when an Agent call sets no model and its type is not pinned), same_bash_repeats (how many times the
+command being run now has run since the last file edit; read-only commands such as ls / git status never count).
 """
-import fcntl, glob, hashlib, json, os, sys, time
+import fcntl, glob, hashlib, json, os, re, sys, time
 
 HOME = os.path.expanduser(os.getenv('CLAUDE_HELPER_HOME', '~/.claude-helper'))
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+EDIT_TOOLS = ('Edit', 'Write', 'MultiEdit', 'NotebookEdit')
+READ_ONLY = ('ls', 'cat', 'head', 'tail', 'grep', 'rg', 'find', 'wc', 'pwd', 'echo', 'which', 'stat', 'du', 'df', 'date',
+             'tree', 'file', 'true', 'mkdir -p', 'git status', 'git log', 'git diff', 'git show', 'git branch', 'git remote',
+             'git rev-parse', 'git fetch', 'sleep')
+
+
+def read_only(cmd):
+    """True when every part of a command chain only looks (ls, git status, mkdir -p ...): repeating those is normal."""
+    parts = [p.strip() for p in re.split(r'&&|\|\||;|\||\n', cmd or '') if p.strip()]
+    parts = [p for p in parts if not p.startswith('cd ')]
+    return bool(parts) and all(any(p == w or p.startswith(w + ' ') for w in READ_ONLY) for p in parts)
 
 
 def rules_path():
@@ -90,6 +104,7 @@ def handoff(path, sid, value):
           '## What the user asked (first, last)'] + [f'- {x}' for x in (prompts[:1] + prompts[-2:])] + [
           '', '## Files edited (count)'] + [f'- {f} ({n})' for f, n in sorted(files.items(), key=lambda kv: -kv[1])[:25]] + [
           '', '## Recent commits'] + [f'- {c}' for c in commits[-5:]] + ['', '## Last assistant message', '', last_text[:1500], '',
+          '## Added by the session before handing over', '', '(decisions, what is left, how to verify)', '',
           'Next session: read this file, check `git status`, and continue from the last message above.']
     open(p, 'w').write('\n'.join(md) + '\n')
     return p
@@ -166,10 +181,13 @@ def main():
     if d.get('transcript_path'):
         scan(d['transcript_path'], st)
     tool, ti = d.get('tool_name', ''), d.get('tool_input') or {}
-    if event == 'PreToolUse' and tool == 'Bash':
+    st['cur_bash'] = 0
+    if event == 'PreToolUse' and tool in EDIT_TOOLS:
+        st['bash'] = {}                         # re-running a test or build after a fix is not a retry loop
+    if event == 'PreToolUse' and tool == 'Bash' and not read_only(ti.get('command')):
         k = hashlib.md5((ti.get('command') or '').encode()).hexdigest()
         st['bash'][k] = st['bash'].get(k, 0) + 1
-        st['cur_bash'] = st['bash'][k]          # repeats of THIS command, not the session's worst one
+        st['cur_bash'] = st['bash'][k]          # repeats of THIS command since the last edit
     st['cur_agent_nomodel'] = 0
     if event == 'PreToolUse' and tool == 'Agent' and not ti.get('model'):
         # agent types with a model in their definition carry it; everything else inherits the parent model

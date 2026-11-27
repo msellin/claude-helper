@@ -2,7 +2,7 @@
 
 **See where your Claude Code tokens go, and put guardrails on the waste.**
 
-claude-helper reads your local Claude Code transcripts and shows where tokens went: context size, cache hits, Opus vs Sonnet/Haiku, subagents, retry loops and cost per commit. It also adds a small hook that can warn or block wasteful patterns as they happen, such as runaway context, the same failing command run over and over, or subagents that inherit Opus by accident.
+claude-helper reads your local Claude Code transcripts and shows where tokens and money went: estimated API cost per day, project and session, context size, cache hits, Opus vs Sonnet/Haiku, subagents, retry loops and cost per commit. It also adds a small hook that can warn or block wasteful patterns as they happen, such as runaway context, the same failing command run over and over, or subagents that inherit Opus by accident.
 
 - **Local only.** It reads `~/.claude/projects/**/*.jsonl` and writes to `~/.claude-helper/`. Nothing is uploaded.
 - **No dependencies.** Python 3.8+ standard library. macOS and Linux.
@@ -32,15 +32,16 @@ Optional: put it on your PATH with `ln -s "$PWD/claude-helper" /usr/local/bin/cl
 
 | Command | What you get |
 |---|---|
-| `./claude-helper report` | Daily table for the last 8 days: calls, weighted tokens, cache hit, average context, % of calls above 250k context, Opus share, commits. Plus your costliest sessions. Full JSON in `~/.claude-helper/report.json`. A few GB of transcripts takes a minute or two. |
+| `./claude-helper report` | Daily table for the last 8 days: calls, estimated API cost, cost per commit, Opus share of cost, weighted tokens, cache hit, average context, % of calls above 250k context, commits. Plus your costliest sessions. Full JSON in `~/.claude-helper/report.json`. A few GB of transcripts takes a minute or two. |
 | `./claude-helper backtest --since 2026-01-01` | How often each rule *would* have fired on your history, and what share of cost came after the first firing. Use it to pick thresholds before you enforce anything. |
-| `./claude-helper events` | What the guard actually did in the last 7 days, per rule, shadow vs enforce. |
-| `./claude-helper digest` | Last 7 days vs the 7 before: flags, cost per project, guard activity, rules that never fire. |
+| `./claude-helper events` | What the guard did in the last 7 days and whether it worked: how many calls sessions kept running after a context warning, how often a blocked command was sent again, how many handover notes were opened. |
+| `./claude-helper digest` | Last 7 days vs the 7 before: cost, flags, cost per project, rule outcomes, rules that never fire. |
 | `./claude-helper compare my-changes.json` | Before/after metrics around the dates you changed something (a CLAUDE.md rule, a new hook). See `changes.example.json`. |
 | `./claude-helper worktrees` | Finds finished git worktrees that agents left behind. Read-only unless you add `--apply`. |
 | `./claude-helper off` / `on` | Kill switch for the guard (same as `CLAUDE_HELPER_OFF=1`). |
 
-"Weighted" means input-token equivalents: cache read ×0.1, cache write ×1.25 (5 min) or ×2 (1 h), output ×5. It is a relative cost measure, **not dollars**.
+**Est. $** is what the usage would cost at Anthropic's list API prices (`prices.py`), so it reflects which model did the work. If you are on a Pro/Max plan you don't pay this; read it as a yardstick for comparing models, projects and weeks. Override or add prices in `~/.claude-helper/prices.json` (`{"claude-opus-5-5": {"in": 4, "out": 20, "cache_read": 0.2}}`, $ per million tokens).
+**Weighted** is input-token equivalents (cache read ×0.1, cache write ×1.25 or ×2, output ×5), the same for every model; the guard's `session-cost` rule uses it.
 
 ## The guard
 
@@ -48,20 +49,20 @@ Rules live in `~/.claude-helper/guard_rules.json`; edit that file, not the one i
 
 | Rule | Fires when | Action |
 |---|---|---|
-| `ctx-warn` | context ≥ 250k tokens (again every +50k) | Tells the model to hand off, and writes a handover note to `~/.claude-helper/handoffs/` |
+| `ctx-warn` | context ≥ 250k tokens (again every +50k) | Writes a handover note to `~/.claude-helper/handoffs/` and tells the model to finish the step, complete the note and give you one line to paste into a fresh session |
 | `ctx-block` | context ≥ 400k | Blocks new Agent / WebSearch / WebFetch / SendMessage calls |
 | `session-cost` | session ≥ 10M weighted units | Warns: finish the step, then hand off |
-| `retry-loop` | the same Bash command runs a 3rd time | Blocks it: read the error, change approach |
+| `retry-loop` | the same Bash command runs a 3rd time with no file edit in between | Blocks it: read the error, change approach. Read-only commands (`ls`, `git status`, `mkdir -p` ...) never count, and an edit resets the count, so re-running tests after a fix is fine |
 | `agent-model` | an Agent call sets no `model` and its agent type doesn't pin one | Blocks it: pick haiku / sonnet / opus explicitly |
 
-**Recommended rollout:** leave everything in `shadow` for a week, run `./claude-helper events` and `backtest`, then set `"mode": "enforce"` on the rules whose firings were real waste. Full rule format: [docs/rules.md](docs/rules.md).
+**Recommended rollout:** leave everything in `shadow` for a week, run `./claude-helper backtest` and `events`, then set `"mode": "enforce"` on the rules whose firings were real waste. After that, `events` shows whether each enforced rule changes what the model does. Full rule format: [docs/rules.md](docs/rules.md).
 
 ## How it works
 
 ```
-~/.claude/projects/*.jsonl ──► tokwaste.py ──► report.json ──► report / digest / compare
+~/.claude/projects/*.jsonl ──► tokwaste.py (+ prices.py) ──► report.json ──► report / digest / compare
                          └──► backtest.py (replays rules over history)
-Claude Code hook event ──► guard.py ──► warn / block / log ──► ~/.claude-helper/events.jsonl
+Claude Code hook event ──► guard.py ──► warn / block / log ──► ~/.claude-helper/events.jsonl ──► outcomes.py
 ```
 
 | File | Role |
@@ -71,6 +72,8 @@ Claude Code hook event ──► guard.py ──► warn / block / log ──►
 | `guard.py` | the hook: reads the session transcript incrementally, evaluates rules |
 | `guard_rules.default.json` | starter rules (all shadow) |
 | `tokwaste.py` | transcript analyser |
+| `prices.py` | list prices per model, for the estimated cost |
+| `outcomes.py` | did enforced rules change behaviour (used by `events` and `digest`) |
 | `backtest.py`, `compare.py`, `digest.py` | rule replay, before/after, weekly digest |
 | `worktrees.py`, `worktrees-weekly.sh` | git worktree audit and cleanup |
 

@@ -27,7 +27,7 @@ The guard reads rules from the first file that exists:
 |---|---|
 | `context_k` | tokens in the context at the last API call, in thousands |
 | `session_weighted_M` | weighted units used so far in this session, in millions |
-| `same_bash_repeats` | how many times the Bash command about to run has run in this session |
+| `same_bash_repeats` | how many times the Bash command about to run has run since the last Edit/Write. Read-only commands (`ls`, `cat`, `grep`, `git status/log/diff`, `mkdir -p` ...; after any leading `cd`) are never counted |
 | `agent_no_model` | 1 when an Agent call sets no `model` and its agent type has no `model:` in `~/.claude/agents/*.md` or `.claude/agents/*.md` |
 
 ## Files in ~/.claude-helper
@@ -39,6 +39,7 @@ The guard reads rules from the first file that exists:
 | `state/` | per-session scan state (safe to delete) |
 | `handoffs/` | auto handover notes |
 | `report.json`, `digests/` | reports |
+| `prices.json` | optional price overrides, $ per million tokens: `{"model-id-substring": {"in": 4, "out": 20, "cache_read": 0.2}}` |
 | `OFF` | if this file exists the guard does nothing |
 
 Set `CLAUDE_HELPER_HOME` to use another folder.

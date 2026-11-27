@@ -20,6 +20,7 @@ class Smoke(unittest.TestCase):
                         CLAUDE_HELPER_LAUNCHAGENTS=os.path.join(self.tmp, 'LaunchAgents'))
         self.env.pop('CLAUDE_HELPER_OFF', None)
         self.env.pop('CLAUDE_HELPER_RULES', None)
+        self.env.pop('CLAUDE_PROJECTS', None)
         proj = os.path.join(self.tmp, 'projects', '-Users-someone-code-demo')
         os.makedirs(proj)
         self.transcript = os.path.join(proj, 's1.jsonl')
@@ -46,6 +47,7 @@ class Smoke(unittest.TestCase):
         rep = json.load(open(out))
         self.assertEqual(sum(w['calls'] for w in rep['weeks'].values()), 5)
         self.assertEqual(rep['top_sessions'][0]['project'], 'demo')
+        self.assertGreater(rep['top_sessions'][0]['usd'], 0)
 
     def test_guard_enforce_blocks_and_shadow_logs(self):
         rule = dict(id='ctx-block', metric='context_k', gte=250, event='PreToolUse', action='block', mode='enforce', message='ctx {value}k')
@@ -71,6 +73,39 @@ class Smoke(unittest.TestCase):
         del self.env['CLAUDE_HELPER_OFF']
         r = self.py('guard.py', stdin='not json')
         self.assertEqual((r.returncode, r.stdout), (0, ''))
+
+    def test_retry_loop_resets_on_edit_and_ignores_read_only(self):
+        rule = dict(id='retry-loop', metric='same_bash_repeats', gte=3, event='PreToolUse', action='block', mode='enforce',
+                    tools=['Bash'], message='loop {value}')
+        run = lambda tool, inp: self.guard('PreToolUse', tool, inp, [rule]).stdout
+        for _ in range(5):
+            self.assertEqual(run('Bash', {'command': 'cd /x && git status --short'}), '')   # read-only: never counts
+        self.assertEqual(run('Bash', {'command': 'npm test'}), '')
+        self.assertEqual(run('Bash', {'command': 'npm test'}), '')
+        run('Edit', {'file_path': '/x/a.py'})                                               # a fix resets the count
+        self.assertEqual(run('Bash', {'command': 'npm test'}), '')
+        self.assertEqual(run('Bash', {'command': 'npm test'}), '')
+        self.assertIn('"deny"', run('Bash', {'command': 'npm test'}))                      # 3rd run with no edit between
+
+    def test_usd_uses_model_prices(self):
+        sys.path.insert(0, ROOT)
+        from prices import usd
+        u = {'input_tokens': 1_000_000, 'output_tokens': 0}
+        self.assertAlmostEqual(usd(u, 'claude-opus-5-5'), 4.0)
+        self.assertAlmostEqual(usd(u, 'claude-sonnet-5-5'), 2.0)
+        self.assertAlmostEqual(usd({'cache_read_input_tokens': 1_000_000}, 'claude-opus-5-5'), 0.2)
+        self.assertAlmostEqual(usd({'output_tokens': 1_000_000}, 'claude-haiku-5-5'), 0.5)
+
+    def test_outcomes_counts_calls_after_warning(self):
+        home = self.env['CLAUDE_HELPER_HOME']
+        os.makedirs(home)
+        with open(os.path.join(home, 'events.jsonl'), 'w') as f:
+            import time
+            f.write(json.dumps(dict(ts=time.time(), session='s1', rule='ctx-warn', value=300, mode='enforce')) + '\n')
+        self.env['CLAUDE_PROJECTS'] = os.path.join(self.tmp, 'projects')
+        r = self.py('outcomes.py', '--days', '3650')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('ctx-warn', r.stdout)
 
     def test_default_rules_are_all_shadow(self):
         rules = json.load(open(os.path.join(ROOT, 'guard_rules.default.json')))['rules']

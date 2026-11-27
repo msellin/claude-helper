@@ -10,7 +10,7 @@
       "action": "warn",
       "mode": "shadow",
       "repeat_step": 50,
-      "message": "Context is ~{value}k tokens (limit {gte}k): every turn re-reads it. A handover note was written to {handoff}: check it, add anything missing, then continue in a FRESH session."
+      "message": "Context is ~{value}k tokens (limit {gte}k): every turn re-reads all of it. A handover note is at {handoff}. Finish the current step, add to that note anything a fresh session needs (decisions made, what is left, how to verify), then end your reply to the user with this exact line so they can paste it into a NEW session: Continue the work described in {handoff}"
     },
     {
       "id": "ctx-block",

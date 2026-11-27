@@ -3,14 +3,14 @@
 
   claude-helper report [--root DIR]     analyse your transcripts -> ~/.claude-helper/report.json + daily summary
   claude-helper backtest [--since DATE] how often each guard rule would have fired on your history
-  claude-helper events [--days 7]       what the guard actually did (fires per rule, shadow vs enforce)
+  claude-helper events [--days 7]       what the guard did and whether it worked (calls after a warning, re-blocks)
   claude-helper digest                  weekly Markdown digest -> ~/.claude-helper/digests/<date>.md
   claude-helper compare CHANGES.json    before/after metrics around dates you changed something
   claude-helper worktrees [--apply]     find (and optionally remove) finished git worktrees
   claude-helper install | uninstall     add / remove the guard hook (see install.py --help)
   claude-helper off | on                kill switch for the guard
 """
-import collections, datetime, json, os, subprocess, sys
+import json, os, subprocess, sys
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 HOME = os.path.expanduser(os.getenv('CLAUDE_HELPER_HOME', '~/.claude-helper'))
@@ -27,34 +27,22 @@ def summary(path):
     if not w:
         print('no Claude Code transcripts found (looked in ~/.claude/projects; use --root DIR for another place)')
         return
-    print(f'\n{"day":10s} {"calls":>6s} {"weighted M":>10s} {"cache hit":>9s} {"avg ctx k":>9s} {">250k %":>7s} {"opus %":>6s} {"commits":>7s}')
+    print(f'\n{"day":10s} {"calls":>6s} {"est. $":>8s} {"$/commit":>8s} {"opus $%":>7s} {"weighted M":>10s} {"cache hit":>9s} {"avg ctx k":>9s} {">250k %":>7s} {"commits":>7s}')
     for k in sorted(w)[-8:]:
         r = w[k]
-        f = lambda x, m=1: '-' if x is None else f'{x * m:.0f}' if m != 1 else f'{x}'
-        print(f'{k:10s} {r["calls"]:6d} {r["weighted_M"]:10.1f} {f(r["cache_hit"]):>9s} {f(r["avg_ctx_k"]):>9s} '
-              f'{f(r["pct_calls_gt250k"]):>7s} {f(r["opus_share"], 100):>6s} {r["commits"]:7d}')
+        f = lambda x, m=1, d=0: '-' if x is None else f'{x * m:.{d}f}'
+        print(f'{k:10s} {r["calls"]:6d} {f(r.get("usd"), d=2):>8s} {f(r.get("usd_per_commit"), d=2):>8s} {f(r.get("opus_usd_share"), 100):>7s} '
+              f'{r["weighted_M"]:10.1f} {f(r["cache_hit"], d=3):>9s} {f(r["avg_ctx_k"]):>9s} {f(r["pct_calls_gt250k"], d=1):>7s} {r["commits"]:7d}')
     print('\ncostliest sessions:')
     for s in rep['top_sessions'][:5]:
-        print(f'  {s["weighted_M"]:6.1f}M  {s["calls"]:5d} calls  {s["project"]}')
-    print(f'\nfull report: {path}   (weighted = input-token equivalents, not dollars)')
+        print(f'  ${s.get("usd", 0):8.2f}  {s["weighted_M"]:6.1f}M  {s["calls"]:5d} calls  {s["project"]}')
+    print(f'\nfull report: {path}   (est. $ = list-price API cost; weighted = input-token equivalents)')
 
 
 def events(days):
-    since = (datetime.datetime.now() - datetime.timedelta(days=days)).timestamp()
-    try:
-        ev = [json.loads(l) for l in open(os.path.join(HOME, 'events.jsonl'))]
-    except OSError:
-        ev = []
-    ev = [e for e in ev if e.get('ts', 0) >= since]
-    if not ev:
-        print(f'no guard events in the last {days} days (is the hook installed? `claude-helper install`)')
-        return
-    by = collections.defaultdict(list)
-    for e in ev:
-        by[(e['rule'], e['mode'])].append(e)
-    print(f'guard events, last {days} days')
-    for (rule, mode), es in sorted(by.items()):
-        print(f'  {rule:14s} {mode:8s} fires {len(es):4d}  sessions {len({e["session"] for e in es}):3d}')
+    sys.path.insert(0, HERE)
+    from outcomes import compute, render
+    print(render(compute(days)))
 
 
 def main():

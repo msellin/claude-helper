@@ -4,7 +4,7 @@ Usage: backtest.py [--rules <file>] [--root ~/.claude/projects] [--since 2026-10
 Main session files only (not subagent transcripts). Cost = weighted input-token equivalents (see guard.weighted)."""
 import sys, os, json, glob, argparse, collections
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from guard import weighted, ctx, rules_path, pinned_agents
+from guard import weighted, ctx, rules_path, pinned_agents, read_only, EDIT_TOOLS
 PINNED = pinned_agents()
 
 ap = argparse.ArgumentParser()
@@ -33,9 +33,13 @@ def timeline(path):
             if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') == 'Agent':
                 i = b.get('input') or {}
                 nomodel = nomodel or int(not i.get('model') and i.get('subagent_type') not in PINNED)
+            if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') in EDIT_TOOLS:
+                bash.clear()                     # same reset as the guard: a re-run after an edit is not a loop
             if isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') == 'Bash':
-                bash[(b.get('input') or {}).get('command')] += 1
-                bmax = max(bmax, bash[(b.get('input') or {}).get('command')])
+                cmd = (b.get('input') or {}).get('command')
+                if not read_only(cmd):
+                    bash[cmd] += 1
+                    bmax = max(bmax, bash[cmd])
         e = by_id.get(m.get('id'))
         if e is None:
             e = by_id[m.get('id')] = {}
